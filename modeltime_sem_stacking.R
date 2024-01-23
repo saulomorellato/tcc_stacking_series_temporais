@@ -6,6 +6,7 @@ rm(list=ls(all=TRUE))
 library(tidyverse)
 library(tidymodels)
 library(stacks)
+library(plsmod)
 library(modeltime)
 library(modeltime.resample)
 library(modeltime.ensemble)
@@ -16,9 +17,11 @@ library(tictoc)
 
 #####  CARREGAR OS DADOS  #####
 
-df<- read.csv("G:/Meu Drive/estatistica/modeltime/electric_production.csv",header=TRUE)
+df<- read.csv("electric_production.csv",header=TRUE)
 
 df %>% glimpse()
+
+df$DATE<- df$DATE %>% as.Date.character("%m/%d/%Y")
 
 df %>% plot_time_series(DATE, IPG2211A2N)
 
@@ -26,8 +29,8 @@ df %>% plot_time_series(DATE, IPG2211A2N)
 
 ##### SPLIT TRAIN/TEST/VALIDATION #####
 
-split<- df %>% time_series_split(data_var = dteday,
-                                 assess = "3 months",
+split<- df %>% time_series_split(data_var = DATE,
+                                 assess = "5 years",
                                  cumulative = TRUE)
 
 #split<- df %>% initial_time_split(prop = 0.8)
@@ -36,15 +39,15 @@ df.train<- training(split)
 df.test<- testing(split)
 
 
-folds<- df.train %>% time_series_cv(data_var = dteday,
-                                    assess = "2 months",
-                                    skip = "2 months",
+folds<- df.train %>% time_series_cv(data_var = DATE,
+                                    assess = "1 year",
+                                    skip = "1 year",
                                     cumulative = TRUE,
                                     slice_limit = 5)
 
 
 folds %>% tk_time_series_cv_plan() %>% 
-  plot_time_series_cv_plan(.date_var = dteday, .value = cnt)
+  plot_time_series_cv_plan(.date_var = DATE, .value = IPG2211A2N)
 
 
 
@@ -52,159 +55,182 @@ folds %>% tk_time_series_cv_plan() %>%
 
 # receita s/ covariáveis
 
-recipe0<- recipe(cnt ~ dteday , data = df.train)
+rec_ts<- recipe(IPG2211A2N ~ DATE , data = df.train)
 
 
 # receita c/ covariáveis
 
-recipe1<- recipe(cnt ~ ., data = df.train) %>%
-  step_fourier(dteday, period = c(7,365), K = 15) %>% 
-  step_date(dteday, features = "month", ordinal = FALSE) %>%
+rec_reg<- recipe(IPG2211A2N ~ ., data = df.train) %>%
+  step_fourier(DATE, period = 12, K = 15) %>% 
+  step_date(DATE, features = "month", ordinal = FALSE) %>%
   step_dummy(all_nominal_predictors()) %>% 
-  step_mutate(dteday = as.numeric(dteday)) %>%
-  step_normalize(dteday)
+  step_mutate(DATE = as.numeric(DATE)) %>%
+  step_mutate(DATE_sqrt = sqrt(DATE)) %>%
+  step_mutate(DATE_log = log(DATE)) %>%
+  step_normalize(DATE) %>% 
+  step_lag(IPG2211A2N, lag = 1:5) %>% 
+  step_impute_bag(all_predictors())
+
 
 
 # receita c/ covariáveis
 
-recipe2<- recipe(cnt ~ ., data = df.train) %>%
-  step_fourier(dteday, period = c(7,12,30,52,90,365), K = 15) %>% 
-  step_date(dteday, features = "month", ordinal = FALSE) %>%
-  step_dummy(all_nominal_predictors()) %>% 
-  step_mutate(dteday = as.numeric(dteday)) %>%
-  step_normalize(dteday)
+#recipe2<- recipe(cnt ~ ., data = df.train) %>%
+#  step_fourier(dteday, period = c(7,12,30,52,90,365), K = 15) %>% 
+#  step_date(dteday, features = "month", ordinal = FALSE) %>%
+#  step_dummy(all_nominal_predictors()) %>% 
+#  step_mutate(dteday = as.numeric(dteday)) %>%
+#  step_normalize(dteday)
 
 
 
 ##### MODELOS #####
 
-fit.prophet<- prophet_reg(changepoint_num = tune(),
-                          changepoint_range = tune()) %>%
-  set_engine("prophet") %>%
-  set_mode("regression")
-
-fit.arima<- arima_reg(non_seasonal_ar = tune(),
-                      non_seasonal_differences = tune(),
-                      non_seasonal_ma = tune(),
-                      seasonal_ar = tune(),
-                      seasonal_differences = tune(),
-                      seasonal_ma = tune()) %>%
+model.arima<- arima_reg() %>%
   set_engine("auto_arima") %>%
   set_mode("regression")
 
-fit.arima.boost<- arima_boost(learn_rate = tune(),
-                              trees = tune()) %>%
+
+#model.arima<- arima_reg(non_seasonal_ar = tune(),
+#                      non_seasonal_differences = tune(),
+#                      non_seasonal_ma = tune(),
+#                      seasonal_ar = tune(),
+#                      seasonal_differences = tune(),
+#                      seasonal_ma = tune()) %>%
+#  set_engine("auto_arima") %>%
+#  set_mode("regression")
+
+
+model.arima.boost<- arima_boost(min_n = tune(),
+                                trees = tune(),
+                                learn_rate = tune()) %>%
   set_engine("auto_arima_xgboost") %>%
   set_mode("regression")
 
-fit.las<- linear_reg(penalty = tune(), mixture = 1) %>% 
+
+model.prophet.reg<- prophet_reg(changepoint_num = tune(),
+                                changepoint_range = tune(),
+                                growth = tune(),
+                                season = tune()) %>%
+  set_engine("prophet") %>%
+  set_mode("regression")
+
+
+model.prophet.boost<- prophet_boost(changepoint_num = tune(),
+                                    changepoint_range = tune(),
+                                    growth = tune(),
+                                    season = tune(),
+                                    min_n = tune(),
+                                    trees = tune(),
+                                    learn_rate = tune()) %>%
+  set_engine("prophet_xgboost") %>%
+  set_mode("regression")
+
+
+model.pls<- parsnip::pls(num_comp = tune()) %>%
+  set_engine("mixOmics") %>%
+  set_mode("regression")
+
+
+model.las<- linear_reg(penalty = tune(), mixture = 1) %>% 
   set_engine("glmnet") %>%
   set_mode("regression")
 
-fit.rid<- linear_reg(penalty = tune(), mixture = 0) %>% 
+
+model.rid<- linear_reg(penalty = tune(), mixture = 0) %>% 
   set_engine("glmnet") %>%
   set_mode("regression")
 
-fit.net<- linear_reg(penalty = tune(), mixture = tune()) %>% 
+
+model.net<- linear_reg(penalty = tune(), mixture = tune()) %>% 
   set_engine("glmnet") %>%
   set_mode("regression")
 
-fit.poi<- poisson_reg(penalty = tune(), mixture = tune()) %>% 
-  set_engine("glmnet") %>%
+
+model.svm.lin<- svm_linear(cost = tune(), margin = tune()) %>%
+  set_engine("kernlab") %>%
   set_mode("regression")
+
+
+model.svm.pol<- svm_poly(cost = tune(), margin = tune(), degree = tune(),
+                         scale_factor = tune()) %>%
+  set_engine("kernlab") %>%
+  set_mode("regression")
+
+
+model.svm.rbf<- svm_rbf(cost = tune(), rbf_sigma = tune(), margin = tune()) %>%
+  set_engine("kernlab") %>%
+  set_mode("regression")
+
 
 
 
 ##### WORKFLOW #####
 
-wf.prophet<- workflow() %>%
-  add_recipe(recipe0) %>%
-  add_model(fit.prophet)
-
 wf.arima<- workflow() %>%
-  add_recipe(recipe0) %>%
-  add_model(fit.arima)
+  add_recipe(rec_ts) %>%
+  add_model(model.arima)
 
 wf.arima.boost<- workflow() %>%
-  add_recipe(recipe0) %>%
-  add_model(fit.arima.boost)
+  add_recipe(rec_ts) %>%
+  add_model(model.arima.boost)
 
-wf.las1<- workflow() %>%
-  add_recipe(recipe1) %>%
-  add_model(fit.las)
+wf.prophet.reg<- workflow() %>%
+  add_recipe(rec_ts) %>%
+  add_model(model.prophet.reg)
 
-wf.rid1<- workflow() %>%
-  add_recipe(recipe1) %>%
-  add_model(fit.rid)
+wf.prophet.boost<- workflow() %>%
+  add_recipe(rec_ts) %>%
+  add_model(model.prophet.boost)
 
-wf.net1<- workflow() %>%
-  add_recipe(recipe1) %>%
-  add_model(fit.net)
+wf.pls<- workflow() %>%
+  add_recipe(rec_reg) %>%
+  add_model(model.pls)
 
-wf.las2<- workflow() %>%
-  add_recipe(recipe2) %>%
-  add_model(fit.las)
+wf.las<- workflow() %>%
+  add_recipe(rec_reg) %>%
+  add_model(model.las)
 
-wf.rid2<- workflow() %>%
-  add_recipe(recipe2) %>%
-  add_model(fit.rid)
+wf.rid<- workflow() %>%
+  add_recipe(rec_reg) %>%
+  add_model(model.rid)
 
-wf.net2<- workflow() %>%
-  add_recipe(recipe2) %>%
-  add_model(fit.net)
+wf.net<- workflow() %>%
+  add_recipe(rec_reg) %>%
+  add_model(model.net)
 
-wf.poi1<- workflow() %>%
-  add_recipe(recipe1) %>%
-  add_model(fit.poi)
+wf.svm.lin<- workflow() %>%
+  add_recipe(rec_reg) %>%
+  add_model(model.svm.lin)
 
-wf.poi2<- workflow() %>%
-  add_recipe(recipe2) %>%
-  add_model(fit.poi)
+wf.svm.pol<- workflow() %>%
+  add_recipe(rec_reg) %>%
+  add_model(model.svm.pol)
+
+wf.svm.rbf<- workflow() %>%
+  add_recipe(rec_reg) %>%
+  add_model(model.svm.rbf)
+
+
+
+##### FITTING MODELS WITHOUT HIPERPARAMETERS TUNING #####
+
+wf.arima<- wf.arima %>% fit(df.train)
+
 
 
 ##### HIPERPARAMETERS TUNING - BAYESIAN SEARCH #####
 
 tic()
 set.seed(1)
-tune.prophet<- tune_bayes(wf.prophet,
-                          resamples = folds,
-                          initial = 10,
-                          control = control_stack_bayes(),
-                          metrics = metric_set(rmse),
-                          param_info = parameters(changepoint_num(range=c(0,50)),
-                                                  changepoint_range(range=c(0.5,0.95)))
-)
-toc()
-# 49.11 sec elapsed
-
-
-
-tic()
-set.seed(1)
-tune.arima<- tune_bayes(wf.arima,
-                        resamples = folds,
-                        initial = 10,
-                        control = control_stack_bayes(),
-                        metrics = metric_set(rmse),
-                        param_info = parameters(non_seasonal_ar(range=c(0,7)),
-                                                non_seasonal_differences(range=c(1,2)),
-                                                non_seasonal_ma(range=c(0,7)),
-                                                seasonal_ar(range=c(0,2)),
-                                                seasonal_differences(range=c(0,1)),
-                                                seasonal_ma(range=c(0,2)))
-)
-toc()
-
-
-tic()
-set.seed(1)
 tune.arima.boost<- tune_bayes(wf.arima.boost,
                               resamples = folds,
-                              initial = 15,
+                              initial = 20,
                               control = control_stack_bayes(),
                               metrics = metric_set(rmse),
-                              param_info = parameters(learn_rate(range=c(-100,0)),
-                                                      trees(range=c(0,2000)))
+                              param_info = parameters(min_n(range=c(1,40)),
+                                                      trees(range=c(50,2000)),
+                                                      learn_rate(range=c(-100,0)))
 )
 toc()
 # 148.28 sec elapsed
@@ -212,218 +238,273 @@ toc()
 
 tic()
 set.seed(1)
-tune.las1<- tune_bayes(wf.las1,
-                       resamples = folds,
-                       initial = 10,
-                       control = control_stack_bayes(),
-                       metrics = metric_set(rmse),
-                       param_info = parameters(penalty(range=c(-100,10)))
+tune.prophet.reg<- tune_bayes(wf.prophet.reg,
+                              resamples = folds,
+                              initial = 10,
+                              control = control_stack_bayes(),
+                              metrics = metric_set(rmse),
+                              param_info = parameters(changepoint_num(range=c(0,50)),
+                                                      changepoint_range(range=c(0.5,0.95)),
+                                                      growth(values=c("linear", "logistic")),
+                                                      season(values=c("additive", "multiplicative")))
 )
 toc()
-# 32.54 sec elapsed
+# 83.05 sec elapsed
+
+
+tic()
+set.seed(1)
+tune.prophet.boost<- tune_bayes(wf.prophet.boost,
+                                resamples = folds,
+                                initial = 10,
+                                control = control_stack_bayes(),
+                                metrics = metric_set(rmse),
+                                param_info = parameters(changepoint_num(range=c(0,50)),
+                                                        changepoint_range(range=c(0.5,0.95)),
+                                                        growth(values=c("linear", "logistic")),
+                                                        season(values=c("additive", "multiplicative")),
+                                                        min_n(range=c(1,40)),
+                                                        trees(range=c(50,2000)),
+                                                        learn_rate(range=c(-100,0)))
+)
+toc()
+# 255.15 sec elapsed
+
+
+tic()
+set.seed(0)
+tune.pls<- tune_bayes(wf.pls,
+                      resamples = folds,
+                      initial = 10,
+                      control = control_stack_bayes(),
+                      metrics = metric_set(rmse),
+                      param_info = parameters(num_comp(range=c(1,35)))
+)
+toc()
+# 790.25 sec elapsed
+
+
+tic()
+set.seed(1)
+tune.las<- tune_bayes(wf.las,
+                      resamples = folds,
+                      initial = 10,
+                      control = control_stack_bayes(),
+                      metrics = metric_set(rmse),
+                      param_info = parameters(penalty(range=c(-100,10)))
+)
+toc()
+# 790.57 sec elapsed
+
+
+tic()
+set.seed(1)
+tune.rid<- tune_bayes(wf.rid,
+                      resamples = folds,
+                      initial = 15,
+                      control = control_stack_bayes(),
+                      metrics = metric_set(rmse),
+                      param_info = parameters(penalty(range=c(-100,10)))
+)
+toc()
+# 786.59 sec elapsed
 
 
 
 tic()
 set.seed(1)
-tune.rid1<- tune_bayes(wf.rid1,
-                       resamples = folds,
-                       initial = 15,
-                       control = control_stack_bayes(),
-                       metrics = metric_set(rmse),
-                       param_info = parameters(penalty(range=c(-100,10)))
+tune.net<- tune_bayes(wf.net,
+                      resamples = folds,
+                      initial = 10,
+                      control = control_stack_bayes(),
+                      metrics = metric_set(rmse),
+                      param_info = parameters(penalty(range=c(-100,10)),
+                                              mixture(range=c(0,1)))
 )
 toc()
-# 32.53 sec elapsed
-
+# 803.75 sec elapsed
 
 
 tic()
-set.seed(1)
-tune.net1<- tune_bayes(wf.net1,
-                       resamples = folds,
-                       initial = 10,
-                       control = control_stack_bayes(),
-                       metrics = metric_set(rmse),
-                       param_info = parameters(penalty(range=c(-100,10)),
-                                               mixture(range=c(0,1)))
+set.seed(0)
+tune.svm.lin<- tune_bayes(wf.svm.lin,
+                          resamples = folds,
+                          initial = 10,
+                          control = control_stack_bayes(),
+                          metrics = metric_set(rmse),
+                          param_info = parameters(cost(range=c(-10,5)),
+                                                  svm_margin(range=c(0,0.5)))
 )
 toc()
-# 42.04 sec elapsed
+# 894.89 sec elapsed
 
 
 tic()
-set.seed(1)
-tune.las2<- tune_bayes(wf.las2,
-                       resamples = folds,
-                       initial = 10,
-                       control = control_stack_bayes(),
-                       metrics = metric_set(rmse),
-                       param_info = parameters(penalty(range=c(-100,10)))
+set.seed(0)
+tune.svm.pol<- tune_bayes(wf.svm.pol,
+                          resamples = folds,
+                          initial = 10,
+                          control = control_stack_bayes(),
+                          metrics = metric_set(rmse),
+                          param_info = parameters(cost(range=c(-10,5)),
+                                                  degree(range=c(1,3)),
+                                                  scale_factor(range=c(-10,-1)),
+                                                  svm_margin(range=c(0,0.5)))
 )
 toc()
-# 32.54 sec elapsed
-
+# 861.52 sec elapsed
 
 
 tic()
-set.seed(1)
-tune.rid2<- tune_bayes(wf.rid2,
-                       resamples = folds,
-                       initial = 15,
-                       control = control_stack_bayes(),
-                       metrics = metric_set(rmse),
-                       param_info = parameters(penalty(range=c(-100,10)))
+set.seed(0)
+tune.svm.rbf<- tune_bayes(wf.svm.rbf,
+                          resamples = folds,
+                          initial = 10,
+                          control = control_stack_bayes(),
+                          metrics = metric_set(rmse),
+                          param_info = parameters(cost(range=c(-10,5)),
+                                                  rbf_sigma(range=c(-10,0)),
+                                                  svm_margin(range=c(0,0.5)))
 )
 toc()
-# 32.53 sec elapsed
-
-
-
-tic()
-set.seed(1)
-tune.net2<- tune_bayes(wf.net2,
-                       resamples = folds,
-                       initial = 10,
-                       control = control_stack_bayes(),
-                       metrics = metric_set(rmse),
-                       param_info = parameters(penalty(range=c(-100,10)),
-                                               mixture(range=c(0,1)))
-)
-toc()
-# 42.04 sec elapsed
-
-
-tic()
-set.seed(1)
-tune.poi1<- tune_bayes(wf.poi1,
-                       resamples = folds,
-                       initial = 10,
-                       control = control_stack_bayes(),
-                       metrics = metric_set(rmse),
-                       param_info = parameters(penalty(range=c(-100,10)),
-                                               mixture(range=c(0,1)))
-)
-toc()
-# 42.04 sec elapsed
-
-
-tic()
-set.seed(1)
-tune.poi2<- tune_bayes(wf.poi2,
-                       resamples = folds,
-                       initial = 10,
-                       control = control_stack_bayes(),
-                       metrics = metric_set(rmse),
-                       param_info = parameters(penalty(range=c(-100,10)),
-                                               mixture(range=c(0,1)))
-)
-toc()
-# 42.04 sec elapsed
+# 833.48 sec elapsed
 
 
 
 ## ESCOLHENDO O MELHOR (BEST RMSE)
 
-show_best(tune.prophet,n=3)
-show_best(tune.arima,n=3)
+#show_best(tune.arima,n=3)
 show_best(tune.arima.boost,n=3)
-show_best(tune.las1,n=3)
-show_best(tune.rid1,n=3)
-show_best(tune.net1,n=3)
-show_best(tune.las2,n=3)
-show_best(tune.rid2,n=3)
-show_best(tune.net2,n=3)
-show_best(tune.poi1,n=3)
-show_best(tune.poi2,n=3)
+show_best(tune.prophet.reg,n=3)
+show_best(tune.prophet.boost,n=3)
+show_best(tune.pls,n=3)
+show_best(tune.las,n=3)
+show_best(tune.rid,n=3)
+show_best(tune.net,n=3)
+show_best(tune.svm.lin,n=3)
+show_best(tune.svm.pol,n=3)
+show_best(tune.svm.rbf,n=3)
+
 
 
 ##### TUNED WORKFLOW #####
-
-wf.prophet<- wf.prophet %>% 
-  finalize_workflow(select_best(tune.prophet)) %>% 
-  fit(df.train)
-
-wf.arima<- wf.arima %>% 
-  finalize_workflow(select_best(tune.arima)) %>% 
-  fit(df.train)
 
 wf.arima.boost<- wf.arima.boost %>% 
   finalize_workflow(select_best(tune.arima.boost)) %>% 
   fit(df.train)
 
-wf.las1<- wf.las1 %>% 
-  finalize_workflow(select_best(tune.las1)) %>% 
+wf.prophet.reg<- wf.prophet.reg %>% 
+  finalize_workflow(select_best(tune.prophet.reg)) %>% 
   fit(df.train)
 
-wf.rid1<- wf.rid1 %>% 
-  finalize_workflow(select_best(tune.rid1)) %>% 
+wf.prophet.boost<- wf.prophet.boost %>% 
+  finalize_workflow(select_best(tune.prophet.boost)) %>% 
   fit(df.train)
 
-wf.net1<- wf.net1 %>% 
-  finalize_workflow(select_best(tune.net1)) %>% 
+wf.pls<- wf.pls %>% 
+  finalize_workflow(select_best(tune.pls)) %>% 
   fit(df.train)
 
-wf.las2<- wf.las2 %>% 
-  finalize_workflow(select_best(tune.las2)) %>% 
+wf.las<- wf.las %>% 
+  finalize_workflow(select_best(tune.las)) %>% 
   fit(df.train)
 
-wf.rid2<- wf.rid2 %>% 
-  finalize_workflow(select_best(tune.rid2)) %>% 
+wf.rid<- wf.rid %>% 
+  finalize_workflow(select_best(tune.rid)) %>% 
   fit(df.train)
 
-wf.net2<- wf.net2 %>% 
-  finalize_workflow(select_best(tune.net2)) %>% 
+wf.net<- wf.net %>% 
+  finalize_workflow(select_best(tune.net)) %>% 
   fit(df.train)
 
-wf.poi1<- wf.poi1 %>% 
-  finalize_workflow(select_best(tune.poi1)) %>% 
+wf.svm.lin<- wf.svm.lin %>% 
+  finalize_workflow(select_best(tune.svm.lin)) %>% 
   fit(df.train)
 
-wf.poi2<- wf.poi2 %>% 
-  finalize_workflow(select_best(tune.poi2)) %>% 
+wf.svm.pol<- wf.svm.pol %>% 
+  finalize_workflow(select_best(tune.svm.pol)) %>% 
   fit(df.train)
 
+wf.svm.rbf<- wf.svm.rbf %>% 
+  finalize_workflow(select_best(tune.svm.rbf)) %>% 
+  fit(df.train)
 
-
-#TABELA
-
-modeltime_table(wf.prophet,
-                wf.arima,
-                wf.arima.boost,
-                wf.las1,
-                wf.rid1,
-                wf.net1,
-                wf.las2,
-                wf.rid2,
-                wf.net2,
-                wf.poi1,
-                wf.poi2) %>% 
-  modeltime_calibrate(new_data = df.test) %>% 
-  modeltime_accuracy()
 
 
 # GRÁFICO
 
-modeltime_table(wf.prophet,
-                wf.arima,
+modeltime_table(wf.arima,
                 wf.arima.boost,
-                wf.las1,
-                wf.rid1,
-                wf.net1,
-                wf.las2,
-                wf.rid2,
-                wf.net2,
-                wf.poi1,
-                wf.poi2) %>% 
+                wf.prophet.reg,
+                wf.prophet.boost,
+                wf.pls,
+                wf.las,
+                wf.rid,
+                wf.net,
+                wf.svm.lin,
+                wf.svm.pol,
+                wf.svm.rbf) %>% 
   modeltime_calibrate(new_data = df.test) %>% 
   modeltime_forecast(new_data = df.test, 
                      actual_data = df) %>% 
   plot_modeltime_forecast()
 
 
-wf.best<- wf.prophet
-wf.best  # workflow visualization
+#TABELA
 
-wf.train<- fit(wf.best, df.train)
+medidas<- modeltime_table(wf.arima,
+                          wf.arima.boost,
+                          wf.prophet.reg,
+                          wf.prophet.boost,
+                          wf.pls,
+                          wf.las,
+                          wf.rid,
+                          wf.net,
+                          wf.svm.lin,
+                          wf.svm.pol,
+                          wf.svm.rbf) %>% 
+  modeltime_calibrate(new_data = df.test) %>% 
+  modeltime_accuracy()
+
+medidas
+
+order(medidas$rmse)[1]
+order(medidas$mae)[1]
+order(medidas$mape)[1]
+order(medidas$rsq)[1]
+
+best<- order((rank(medidas$mae)+rank(medidas$mape)+rank(medidas$rmse)+rank(-medidas$rsq))/4)[1]
+
+if(best==1){wf.best<-wf.arima}
+if(best==2){wf.best<-wf.arima.boost}
+if(best==3){wf.best<-wf.prophet.reg}
+if(best==4){wf.best<-wf.prophet.boost}
+if(best==5){wf.best<-wf.pls}
+if(best==6){wf.best<-wf.las}
+if(best==7){wf.best<-wf.rid}
+if(best==8){wf.best<-wf.net}
+if(best==9){wf.best<-wf.svm.lin}
+if(best==10){wf.best<-wf.svm.pol}
+if(best==11){wf.best<-wf.svm.rbf}
+
+wf.best
+
+
+
+############################
+### FINALIZANDO O MODELO ###
+############################
+
+wf.final<- fit(wf.best, df)
+
+
+
+###############################
+### SALVANDO O MODELO FINAL ###
+###############################
+
+saveRDS(wf.final,"wf_electric_production.rds")
+
+
+
 
