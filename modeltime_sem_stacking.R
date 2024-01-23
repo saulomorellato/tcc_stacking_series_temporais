@@ -431,6 +431,8 @@ wf.svm.rbf<- wf.svm.rbf %>%
 
 
 
+### DESEMPENHO DOS MODELOS ###
+
 # GRÁFICO
 
 modeltime_table(wf.arima,
@@ -468,11 +470,13 @@ medidas<- modeltime_table(wf.arima,
 
 medidas
 
-order(medidas$rmse)[1]
-order(medidas$mae)[1]
-order(medidas$mape)[1]
-order(medidas$rsq)[1]
+# escolher o "melhor" modelo segundo qual medida?
+#best<- order(medidas$rmse)[1]
+#best<- order(medidas$mae)[1]
+#best<- order(medidas$mape)[1]
+#best<- order(medidas$rsq)[1]
 
+# escolher o "melhor" modelo segundo um desempenho geral
 best<- order((rank(medidas$mae)+rank(medidas$mape)+rank(medidas$rmse)+rank(-medidas$rsq))/4)[1]
 
 if(best==1){wf.best<-wf.arima}
@@ -491,17 +495,13 @@ wf.best
 
 
 
-############################
 ### FINALIZANDO O MODELO ###
-############################
 
 wf.final<- fit(wf.best, df)
 
 
 
-###############################
 ### SALVANDO O MODELO FINAL ###
-###############################
 
 saveRDS(wf.final,"wf_electric_production.rds")
 
