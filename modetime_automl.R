@@ -20,7 +20,7 @@ h2o.init()
 
 #####  CARREGAR OS DADOS  #####
 
-df<- read.csv("electric_production.csv",header=TRUE)
+df<- read.csv("electric_production.csv", header=TRUE)
 
 df %>% glimpse()
 
@@ -81,8 +81,8 @@ rec<- recipe(IPG2211A2N ~ ., data = df.train) %>%
 
 model.aut<- automl_reg() %>%
   set_engine(engine = "h2o",
-             max_runtime_secs = 60, 
-             max_runtime_secs_per_model = 60,
+             max_runtime_secs = 3600, 
+             max_runtime_secs_per_model = 1000,
              nfolds = 5,
              max_models = 1000,
              exclude_algos = c("DeepLearning"),
@@ -106,6 +106,7 @@ tic()
 wf.fitted<- fit(wf.aut,df.train)
 toc()
 # 531.72 sec elapsed
+# 3792.1 sec elapsed
 
 
 
@@ -153,7 +154,7 @@ wf.final<- fit(wf.fitted, df)
 ### SALVANDO O MODELO FINAL ###
 
 saveRDS(wf.final,"wf_auto_electric_production.rds")
-
+#save_h2o_model(wf.final,"wf_auto_electric_production2")
 
 
 ### ENCERRAR SESSÃO ###
