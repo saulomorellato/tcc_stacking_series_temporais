@@ -1,0 +1,9 @@
+  .model_id .model_desc                          .type   mae  mape  mase smape  rmse   rsq
+      <int> <chr>                                <chr> <dbl> <dbl> <dbl> <dbl> <dbl> <dbl>
+1         1 PROPHET                              Test   2.54  2.37 0.306  2.40  3.54 0.893
+2         2 ENSEMBLE (MEAN): 11 MODELS           Test   2.53  2.42 0.306  2.41  3.36 0.893
+3         3 ENSEMBLE (MEDIAN): 11 MODELS         Test   2.63  2.52 0.318  2.51  3.46 0.886
+4         4 ENSEMBLE (GLMNET STACK): 11 MODELS   Test   3.13  2.97 0.378  3.02  3.89 0.903
+5         5 ENSEMBLE (GLMNET STACK): 11 MODELS   Test   2.99  2.83 0.361  2.87  3.73 0.898
+6         6 ENSEMBLE (GLMNET STACK): 11 MODELS   Test   3.14  2.98 0.379  3.04  3.87 0.902
+7         7 ENSEMBLE (MIXOMICS STACK): 11 MODELS Test   3.20  3.04 0.387  3.09  3.92 0.899

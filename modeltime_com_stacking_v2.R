@@ -71,16 +71,6 @@ rec_reg<- recipe(IPG2211A2N ~ ., data = df.train) %>%
 
 
 
-# receita c/ covariáveis
-
-#recipe2<- recipe(cnt ~ ., data = df.train) %>%
-#  step_fourier(dteday, period = c(7,12,30,52,90,365), K = 15) %>% 
-#  step_date(dteday, features = "month", ordinal = FALSE) %>%
-#  step_dummy(all_nominal_predictors()) %>% 
-#  step_mutate(dteday = as.numeric(dteday)) %>%
-#  step_normalize(dteday)
-
-
 
 ##### MODELOS #####
 
@@ -89,39 +79,11 @@ model.arima<- arima_reg() %>%
   set_mode("regression")
 
 
-#model.arima<- arima_reg(non_seasonal_ar = tune(),
-#                      non_seasonal_differences = tune(),
-#                      non_seasonal_ma = tune(),
-#                      seasonal_ar = tune(),
-#                      seasonal_differences = tune(),
-#                      seasonal_ma = tune()) %>%
-#  set_engine("auto_arima") %>%
-#  set_mode("regression")
-
-
-model.arima.boost<- arima_boost(min_n = tune(),
-                                trees = tune(),
-                                learn_rate = tune()) %>%
-  set_engine("auto_arima_xgboost") %>%
-  set_mode("regression")
-
-
 model.prophet.reg<- prophet_reg(changepoint_num = tune(),
                                 changepoint_range = tune(),
                                 growth = tune(),
                                 season = tune()) %>%
   set_engine("prophet") %>%
-  set_mode("regression")
-
-
-model.prophet.boost<- prophet_boost(changepoint_num = tune(),
-                                    changepoint_range = tune(),
-                                    growth = tune(),
-                                    season = tune(),
-                                    min_n = tune(),
-                                    trees = tune(),
-                                    learn_rate = tune()) %>%
-  set_engine("prophet_xgboost") %>%
   set_mode("regression")
 
 
@@ -135,28 +97,7 @@ model.las<- linear_reg(penalty = tune(), mixture = 1) %>%
   set_mode("regression")
 
 
-model.rid<- linear_reg(penalty = tune(), mixture = 0) %>% 
-  set_engine("glmnet") %>%
-  set_mode("regression")
-
-
-model.net<- linear_reg(penalty = tune(), mixture = tune()) %>% 
-  set_engine("glmnet") %>%
-  set_mode("regression")
-
-
-model.svm.lin<- svm_linear(cost = tune(), margin = tune()) %>%
-  set_engine("kernlab") %>%
-  set_mode("regression")
-
-
-model.svm.pol<- svm_poly(cost = tune(), margin = tune(), degree = tune(),
-                         scale_factor = tune()) %>%
-  set_engine("kernlab") %>%
-  set_mode("regression")
-
-
-model.svm.rbf<- svm_rbf(cost = tune(), rbf_sigma = tune(), margin = tune()) %>%
+model.svm<- svm_rbf(cost = tune(), rbf_sigma = tune(), margin = tune()) %>%
   set_engine("kernlab") %>%
   set_mode("regression")
 
@@ -169,17 +110,9 @@ wf.arima<- workflow() %>%
   add_recipe(rec_ts) %>%
   add_model(model.arima)
 
-wf.arima.boost<- workflow() %>%
-  add_recipe(rec_ts) %>%
-  add_model(model.arima.boost)
-
 wf.prophet.reg<- workflow() %>%
   add_recipe(rec_ts) %>%
   add_model(model.prophet.reg)
-
-wf.prophet.boost<- workflow() %>%
-  add_recipe(rec_ts) %>%
-  add_model(model.prophet.boost)
 
 wf.pls<- workflow() %>%
   add_recipe(rec_reg) %>%
@@ -189,25 +122,9 @@ wf.las<- workflow() %>%
   add_recipe(rec_reg) %>%
   add_model(model.las)
 
-wf.rid<- workflow() %>%
+wf.svm<- workflow() %>%
   add_recipe(rec_reg) %>%
-  add_model(model.rid)
-
-wf.net<- workflow() %>%
-  add_recipe(rec_reg) %>%
-  add_model(model.net)
-
-wf.svm.lin<- workflow() %>%
-  add_recipe(rec_reg) %>%
-  add_model(model.svm.lin)
-
-wf.svm.pol<- workflow() %>%
-  add_recipe(rec_reg) %>%
-  add_model(model.svm.pol)
-
-wf.svm.rbf<- workflow() %>%
-  add_recipe(rec_reg) %>%
-  add_model(model.svm.rbf)
+  add_model(model.svm)
 
 
 
@@ -220,26 +137,13 @@ wf.arima<- wf.arima %>% fit(df.train)
 ##### HIPERPARAMETERS TUNING - BAYESIAN SEARCH #####
 
 tic()
-set.seed(1)
-tune.arima.boost<- tune_bayes(wf.arima.boost,
-                              resamples = folds,
-                              initial = 20,
-                              control = control_stack_bayes(),
-                              metrics = metric_set(rmse),
-                              param_info = parameters(min_n(range=c(1,40)),
-                                                      trees(range=c(50,2000)),
-                                                      learn_rate(range=c(-100,0)))
-)
-toc()
-# 1885 sec elapsed
-
-
-tic()
-set.seed(1)
 tune.prophet.reg<- tune_bayes(wf.prophet.reg,
                               resamples = folds,
                               initial = 10,
-                              control = control_stack_bayes(),
+                              #control = control_stack_bayes(),
+                              control = control_bayes(save_pred=TRUE,
+                                                      save_workflow=TRUE,
+                                                      seed=0),
                               metrics = metric_set(rmse),
                               param_info = parameters(changepoint_num(range=c(0,50)),
                                                       changepoint_range(range=c(0.5,0.95)),
@@ -247,39 +151,24 @@ tune.prophet.reg<- tune_bayes(wf.prophet.reg,
                                                       season(values=c("additive", "multiplicative")))
 )
 toc()
-# 83.05 sec elapsed
+#97.09 sec elapsed
+
+
 
 
 tic()
-set.seed(1)
-tune.prophet.boost<- tune_bayes(wf.prophet.boost,
-                                resamples = folds,
-                                initial = 10,
-                                control = control_stack_bayes(),
-                                metrics = metric_set(rmse),
-                                param_info = parameters(changepoint_num(range=c(0,50)),
-                                                        changepoint_range(range=c(0.5,0.95)),
-                                                        growth(values=c("linear", "logistic")),
-                                                        season(values=c("additive", "multiplicative")),
-                                                        min_n(range=c(1,40)),
-                                                        trees(range=c(50,2000)),
-                                                        learn_rate(range=c(-100,0)))
-)
-toc()
-# 255.15 sec elapsed
-
-
-tic()
-set.seed(0)
 tune.pls<- tune_bayes(wf.pls,
                       resamples = folds,
                       initial = 10,
-                      control = control_stack_bayes(),
+                      #control = control_stack_bayes(),
+                      control = control_bayes(save_pred=TRUE,
+                                              save_workflow=TRUE,
+                                              seed=0),
                       metrics = metric_set(rmse),
                       param_info = parameters(num_comp(range=c(1,35)))
 )
 toc()
-# 790.25 sec elapsed
+# 790.25 sec elapsed (~ 13min )
 
 
 tic()
